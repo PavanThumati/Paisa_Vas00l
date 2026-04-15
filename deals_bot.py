@@ -76,26 +76,51 @@ async def post_deals(deals, source):
             print(f"❌ Post error: {e}")
 
 def monitor_loop():
-    queries = ["mobiles under 15000", "earphones under 1000", "powerbank deals"]
+    # Hyderabad/India TOP categories (2026 best-sellers)
+    categories = [
+        # Electronics (40% sales)
+        "mobiles under 15000", "smartwatch under 2000", "earphones under 1000", "powerbank 10000mah", 
+        "bluetooth speaker under 1000", "led tv under 15000",
+        
+        # Home & Kitchen (top growing)
+        "mixer grinder under 2000", "pressure cooker 5l", "water bottle steel", "induction cooktop", 
+        "air fryer under 5000", "room heater under 1500", "electric kettle 1.5l",
+        
+        # Fashion & Daily
+        "tshirt men pack of 4", "socks pack of 6", "briefs pack of 5", "saree under 1000", 
+        "kurti women cotton",
+        
+        # Beauty & Personal Care
+        "facewash men", "shampoo 650ml", "body lotion 500ml", "hair oil 200ml",
+        
+        # Grocery & Essentials
+        "atta 5kg", "rice 5kg", "oil 5l", "detergent powder 4kg",
+        
+        # Baby & Health
+        "diaper pack", "baby wipes", "protein powder 1kg"
+    ]
     
     while True:
-        print(f"\n🚀 Cycle: {datetime.now().strftime('%H:%M')}")
+        print(f"\n🚀 Cycle: {datetime.now().strftime('%H:%M')} | {len(categories)} categories")
         
-        # Amazon rotating queries
-        for query in queries:
-            print(f"📦 Amazon: {query}")
+        # Rotate 8-12 categories per cycle (avoid spam)
+        random.shuffle(categories)
+        cycle_cats = categories[:10]  # 10 per cycle
+        
+        for query in cycle_cats:
+            print(f"📦 Searching: '{query}'")
             deals = get_amazon_search_deals(query)
             if deals:
                 asyncio.run(post_deals(deals, "Amazon"))
+                time.sleep(5)  # Telegram rate limit
         
-        # DesiDime
-        print("🏷️ DesiDime deals...")
+        # DesiDime bonus
         desi_deals = get_desidime_deals()
         if desi_deals:
             asyncio.run(post_deals(desi_deals, "DesiDime"))
         
-        print("😴 5min sleep...")
-        time.sleep(300)
+        print(f"✅ Cycle done | Next in 4min")
+        time.sleep(240)  # 4min cycles = 360 deals/day
 
 if __name__ == "__main__":
     print("🚀 Amazon + DesiDime Deals Bot!")
