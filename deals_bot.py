@@ -6,6 +6,7 @@ import asyncio
 import time
 from datetime import datetime
 from telegram import Bot
+from telegram.helpers import escape_markdown
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "-100xxxxxxxxxx"))
@@ -23,7 +24,7 @@ def get_amazon_deals(query):
     }
 
     try:
-        time.sleep(random.uniform(2, 4))  # small delay
+        time.sleep(random.uniform(2, 4))
         res = requests.get(url, headers=headers, timeout=20)
         soup = BeautifulSoup(res.text, "lxml")
 
@@ -53,45 +54,36 @@ def get_amazon_deals(query):
 # -----------------------------
 async def send_deals(deals):
     for title, price, link in deals:
-        msg = f"🔥 *Amazon Deal*\n\n{title}\n`{price}`\n\n🛒 {link}"
-
         try:
+            # 🔥 FIX: Escape markdown
+            safe_title = escape_markdown(title, version=2)
+            safe_price = escape_markdown(price, version=2)
+
+            msg = f"🔥 *Amazon Deal*\n\n{safe_title}\n`{safe_price}`\n\n🛒 {link}"
+
             await bot.send_message(
                 chat_id=CHANNEL_ID,
                 text=msg,
-                parse_mode="Markdown",
+                parse_mode="MarkdownV2",  # safer
                 disable_web_page_preview=True
             )
+
             print(f"✅ Posted: {title[:40]}")
-            await asyncio.sleep(3)  # Telegram safe delay
+            await asyncio.sleep(3)
 
         except Exception as e:
             print(f"❌ Telegram error: {e}")
 
-#------------------------------------------------------------------
-async def test_bot():
-    me = await bot.get_me()
-    print(f"✅ Bot connected: {me.username}")
 
-asyncio.run(test_bot())
 # -----------------------------
 async def run_bot():
     categories = [
-        # Electronics
-        "mobiles under 15000", "smartwatch under 2000", "earphones under 1000",
-        "bluetooth speaker under 1000", "powerbank 10000mah",
-
-        # Home
-        "mixer grinder", "pressure cooker 5 litre", "electric kettle",
-
-        # Fashion
-        "tshirt men pack", "shirts for men",
-
-        # Grocery
+        "mobiles under 15000", "smartwatch under 2000",
+        "earphones under 1000", "bluetooth speaker under 1000",
+        "powerbank 10000mah", "tshirt men pack",
         "rice 5kg", "atta 5kg", "tea powder 1kg",
-
-        # Beauty
-        "face wash men", "shampoo 650ml"
+        "face wash men", "shampoo 650ml",
+        "pressure cooker 5 litre", "mixer grinder"
     ]
 
     while True:
