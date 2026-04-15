@@ -20,21 +20,30 @@ print(f"✅ Bot ready: {CHANNEL_ID}")
 bot = Bot(token=BOT_TOKEN)
 
 def scrape_flipkart_category(url):
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"}
     try:
-        resp = requests.get(url, headers=headers, timeout=10)
+        resp = requests.get(url, headers=headers, timeout=15)
         soup = BeautifulSoup(resp.text, 'html.parser')
-        # Find product tiles (adapt selectors)
-        products = soup.find_all('div', {'class': '_1AtVbE col-12-12'})[:5]
+        
+        # Current Flipkart search selectors (2026)
+        products = soup.find_all('div', {'class': '_13oc-S'})[:5]  # Product containers
         deals = []
         for p in products:
-            title = p.find('div', {'class': '_4rR01T'}).text.strip() if p.find('div', {'class': '_4rR01T'}) else 'N/A'
-            price = p.find('div', {'class': '_30jeq3 _1_WHN1'}).text.strip() if p.find('div', {'class': '_30jeq3 _1_WHN1'}) else 'N/A'
-            if '₹' in price and title != 'N/A':
-                deals.append((title, price, url))
+            title_tag = p.find('div', {'class': '_4rR01T'}) or p.find('a', {'class': '_2UzuV9'})
+            title = title_tag.text.strip() if title_tag else 'N/A'
+            
+            price_tag = p.find('div', {'class': '_30jeq3 _1_WHN1'}) or p.find('_25b18c')
+            price = price_tag.text.strip() if price_tag else 'N/A'
+            
+            link_tag = p.find('a', href=True)
+            link = "https://www.flipkart.com" + link_tag['href'] if link_tag else url
+            
+            if '₹' in price and title != 'N/A' and len(title) > 5:
+                print(f"Found: {title[:50]}... {price}")
+                deals.append((title, price, link))
         return deals
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Scrape error: {e}")
         return []
 
 async def post_deals(deals):
