@@ -6,11 +6,17 @@ import time
 import threading
 import os
 
-BOT_TOKEN = os.getenv('BOT_TOKEN')   # From Railway var
-CHANNEL_ID = int(os.getenv('CHANNEL_ID'))  # From Railway var
-if not BOT_TOKEN or not CHANNEL_ID:
-    print("Missing env vars! Set in Railway.")
+BOT_TOKEN = os.getenv('BOT_TOKEN')
+channel_id_str = os.getenv('CHANNEL_ID')
+if not BOT_TOKEN:
+    print("❌ BOT_TOKEN missing! Set in Railway Variables.")
     exit(1)
+if not channel_id_str:
+    print("❌ CHANNEL_ID missing! Forward channel msg to @userinfobot, copy negative ID to Railway Variables.")
+    exit(1)
+CHANNEL_ID = int(channel_id_str)
+print(f"✅ Bot ready: {CHANNEL_ID}")
+
 bot = Bot(token=BOT_TOKEN)
 
 def scrape_flipkart_category(url):
