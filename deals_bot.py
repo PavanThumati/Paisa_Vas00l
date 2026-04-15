@@ -68,7 +68,12 @@ async def send_deals(deals):
         except Exception as e:
             print(f"❌ Telegram error: {e}")
 
+#------------------------------------------------------------------
+async def test_bot():
+    me = await bot.get_me()
+    print(f"✅ Bot connected: {me.username}")
 
+asyncio.run(test_bot())
 # -----------------------------
 async def run_bot():
     categories = [
