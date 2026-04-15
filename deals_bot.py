@@ -4,9 +4,13 @@ import asyncio
 from aiogram import Bot
 import time
 import threading
+import os
 
-BOT_TOKEN = 'your_bot_token_here'  # Railway env var
-CHANNEL_ID = -1001234567890  # Railway env var
+BOT_TOKEN = os.getenv('BOT_TOKEN')   # From Railway var
+CHANNEL_ID = int(os.getenv('CHANNEL_ID'))  # From Railway var
+if not BOT_TOKEN or not CHANNEL_ID:
+    print("Missing env vars! Set in Railway.")
+    exit(1)
 bot = Bot(token=BOT_TOKEN)
 
 def scrape_flipkart_category(url):
