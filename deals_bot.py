@@ -20,30 +20,61 @@ print(f"✅ Bot ready: {CHANNEL_ID} | Amazon Tag: {AMAZON_TAG}")
 bot = Bot(token=BOT_TOKEN)
 
 def get_amazon_search_deals(query="mobiles under 15000"):
-    """Amazon search scraper (easier than PAAPI)"""
     url = f"https://www.amazon.in/s?k={query.replace(' ', '+')}&tag={AMAZON_TAG}"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+        "Accept-Language": "en-IN,en;q=0.9"
     }
     try:
-        resp = requests.get(url, headers=headers, timeout=20)
+        time.sleep(random.uniform(2,4))
+        resp = requests.get(url, headers=headers, timeout=25)
+        print(f"   Status: {resp.status_code} | Size: {len(resp.text)//1000}KB")
+        
         soup = BeautifulSoup(resp.text, 'html.parser')
-        
         deals = []
-        products = soup.find_all('div', {'data-component-type': 's-search-result'})[:4]
-        for p in products:
-            title = p.find('h2')
-            if title:
-                title = title.text.strip()[:100]
-                price = p.find('span', 'a-price-whole')
-                price = price.text.strip() + p.find('span', 'a-price-fraction') if price else '₹N/A'
-                link = p.find('a', 'a-link-normal')['href']
-                link = "https://amazon.in" + link if link else url
-                
-                deals.append((title, price, link))
         
-        return deals
-    except:
+        # Multiple Amazon product container strategies
+        product_containers = (
+            soup.find_all('div', {'data-component-type': 's-search-result'}) or
+            soup.find_all('div', {'data-asin': True}) or
+            soup.find_all('h2', class_=lambda x: x and 'a-size' in str(x)) or
+            soup.select('.s-result-item[data-asin]')
+        )
+        
+        print(f"   Found {len(product_containers)} potential products")
+        
+        for i, p in enumerate(product_containers[:4]):
+            # Title - multiple selectors
+            title = None
+            for selector in ['h2 a span', '.a-text-normal', 'h2']:
+                title_elem = p.select_one(selector)
+                if title_elem and title_elem.text.strip():
+                    title = title_elem.text.strip()[:120]
+                    break
+            
+            # Price - multiple selectors  
+            price = None
+            for selector in ['.a-price-whole', '.a-price .a-offscreen', '[data-testid*="price"]']:
+                price_elem = p.select_one(selector)
+                if price_elem:
+                    price_text = price_elem.text.strip()
+                    if '₹' in price_text or price_text.replace('.', '').isdigit():
+                        price = price_text
+                        break
+            
+            # Link
+            link_elem = p.select_one('a.a-link-normal')
+            link = "https://amazon.in" + link_elem['href'] if link_elem and link_elem.get('href') else url
+            
+            if title and len(title) > 10:
+                deals.append((title, price or "₹Check", link))
+                print(f"   ✅ #{i+1}: {title[:50]}...")
+                break  # First good deal only
+        
+        return deals if deals else []
+        
+    except Exception as e:
+        print(f"   ❌ Amazon error: {e}")
         return []
 
 def get_desidime_deals():
