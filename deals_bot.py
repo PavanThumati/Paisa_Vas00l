@@ -1,135 +1,134 @@
+import feedparser
 import requests
-from bs4 import BeautifulSoup
-import os
-import random
 import asyncio
-import time
-from datetime import datetime
+import os
+import re
 from telegram import Bot
+from datetime import datetime
+import pyshorteners
 
 # -----------------------------
 # ENV VARIABLES
 # -----------------------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID", "-100xxxxxxxxxx"))
-AMAZON_TAG = os.getenv("AMAZON_TAG", "yourtag-21")
+CHANNEL_ID = os.getenv("CHANNEL_ID", "-100xxxxxxxxxx")
 
-if not BOT_TOKEN:
-    print("❌ BOT_TOKEN missing")
-    exit()
+# Your Cuelinks MACID (e.g., 123456T789012)
+CUELINKS_MACID = os.getenv("CUELINKS_MACID", "your_macid_here")
 
 bot = Bot(token=BOT_TOKEN)
+shortener = pyshorteners.Shortener()
+POSTED_FILE = "posted_deals.txt"
 
 # -----------------------------
-# AMAZON SCRAPER
+# STATE MANAGEMENT
 # -----------------------------
-def get_amazon_deals(query):
-    url = f"https://www.amazon.in/s?k={query.replace(' ', '+')}&tag={AMAZON_TAG}"
+def get_posted_deals():
+    if os.path.exists(POSTED_FILE):
+        with open(POSTED_FILE, "r") as f:
+            return set(f.read().splitlines())
+    return set()
 
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Accept-Language": "en-IN,en;q=0.9"
-    }
+def save_posted_deal(deal_id):
+    with open(POSTED_FILE, "a") as f:
+        f.write(f"{deal_id}\n")
 
+# -----------------------------
+# LINK PROCESSING
+# -----------------------------
+def get_clean_destination_url(short_url):
+    """Follows redirects to bypass community tracking links and get the raw URL."""
     try:
-        time.sleep(random.uniform(2, 4))  # avoid blocking
-        res = requests.get(url, headers=headers, timeout=20)
-        soup = BeautifulSoup(res.text, "lxml")
+        # We use a standard User-Agent so we don't get blocked during the redirect hop
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.head(short_url, allow_redirects=True, headers=headers, timeout=10)
+        
+        # Strip out any existing affiliate tags attached to the raw URL
+        clean_url = response.url.split('?')[0] 
+        return clean_url
+    except:
+        return short_url
 
-        products = soup.find_all("div", {"data-component-type": "s-search-result"})[:3]
+def generate_cuelinks_url(raw_url):
+    """Wraps the clean URL in your Cuelinks tracking structure."""
+    # Cuelinks standard redirect format
+    tracking_link = f"https://links.cuelinks.com/v/?macid={CUELINKS_MACID}&url={raw_url}"
+    return tracking_link
 
-        deals = []
-        for p in products:
-            title_tag = p.find("h2")
-            title = title_tag.text.strip() if title_tag else None
-
-            price_tag = p.find("span", class_="a-price-whole")
-            price = f"₹{price_tag.text}" if price_tag else "₹Check"
-
-            link_tag = p.find("a", class_="a-link-normal")
-            link = "https://amazon.in" + link_tag["href"] if link_tag else url
-
-            if title:
-                deals.append((title[:100], price, link))
-
-        return deals
-
+# -----------------------------
+# RSS INTERCEPTOR
+# -----------------------------
+async def hunt_and_post():
+    # DesiDime's front page RSS feed 
+    rss_url = "https://www.desidime.com/new.rss"
+    
+    posted_deals = get_posted_deals()
+    
+    try:
+        feed = feedparser.parse(rss_url)
     except Exception as e:
-        print(f"❌ Scrape error: {e}")
-        return []
+        print(f"⚠️ RSS parsing failed: {e}")
+        return
 
+    for entry in feed.entries:
+        deal_id = entry.id if hasattr(entry, 'id') else entry.link
+        
+        if deal_id in posted_deals:
+            continue
+            
+        title = entry.title
+        raw_community_link = entry.link
+        
+        # 1. Clean the link to find the true destination
+        clean_url = get_clean_destination_url(raw_community_link)
+        
+        # 2. Verify it's a supported e-commerce site before posting
+        supported_stores = ['amazon.in', 'flipkart.com', 'myntra.com', 'ajio.com', 'tatacliq.com']
+        
+        if any(store in clean_url.lower() for store in supported_stores):
+            print(f"🔄 Processing: {title[:50]}...")
+            
+            # 3. Monetize via Cuelinks tracking structure
+            monetized_link = generate_cuelinks_url(clean_url)
 
-# -----------------------------
-# TELEGRAM SENDER (HTML SAFE)
-# -----------------------------
-async def send_deals(deals):
-    for title, price, link in deals:
-        try:
-            msg = f"""🔥 <b>Amazon Deal</b>
+            # 4. Shorten the final Cuelinks URL so it looks clean in Telegram
+            try:
+                tiny_url = shortener.tinyurl.short(monetized_link)
+            except:
+                tiny_url = monetized_link
 
-{title}
-<b>{price}</b>
+            # 5. Construct Telegram Message
+            msg = f"🔥 <b>Trending Loot Alert!</b>\n\n"
+            msg += f"📦 {title}\n\n"
+            msg += f"🛒 <b>Grab it here:</b> {tiny_url}"
 
-🛒 <a href="{link}">Buy Now</a>
-"""
-
-            await bot.send_message(
-                chat_id=CHANNEL_ID,
-                text=msg,
-                parse_mode="HTML",  # ✅ no errors
-                disable_web_page_preview=False
-            )
-
-            print(f"✅ Posted: {title[:40]}")
-            await asyncio.sleep(3)
-
-        except Exception as e:
-            print(f"❌ Telegram error: {e}")
-
+            try:
+                await bot.send_message(
+                    chat_id=CHANNEL_ID,
+                    text=msg,
+                    parse_mode="HTML",
+                    disable_web_page_preview=False
+                )
+                print(f"✅ Posted successfully!")
+                save_posted_deal(deal_id)
+                
+                # Crucial anti-spam pause to protect your Telegram bot token
+                await asyncio.sleep(4) 
+            except Exception as e:
+                print(f"❌ Telegram Error: {e}")
 
 # -----------------------------
 # MAIN LOOP
 # -----------------------------
 async def run_bot():
-    categories = [
-        # Electronics
-        "mobiles under 15000", "smartwatch under 2000",
-        "earphones under 1000", "bluetooth speaker under 1000",
-        "powerbank 10000mah",
-
-        # Home
-        "mixer grinder", "pressure cooker 5 litre",
-        "electric kettle", "air fryer under 5000",
-
-        # Fashion
-        "tshirt men pack", "shirts for men", "jeans for men",
-
-        # Grocery
-        "rice 5kg", "atta 5kg", "tea powder 1kg",
-
-        # Beauty
-        "face wash men", "shampoo 650ml", "hair oil"
-    ]
-
     while True:
-        print(f"\n🚀 {datetime.now().strftime('%H:%M')}")
+        print(f"⚡ [{datetime.now().strftime('%H:%M:%S')}] Scanning RSS Feeds...")
+        await hunt_and_post()
+        
+        # Sleep for 3 minutes before checking for new deals again
+        print("⏳ Waiting 3 minutes...\n")
+        await asyncio.sleep(180) 
 
-        selected = random.sample(categories, 6)
-
-        for query in selected:
-            print(f"🔍 {query}")
-
-            deals = get_amazon_deals(query)
-            if deals:
-                await send_deals(deals)
-
-        print("😴 Sleeping 5 minutes...\n")
-        await asyncio.sleep(300)
-
-
-# -----------------------------
-# START
-# -----------------------------
 if __name__ == "__main__":
-    print("🚀 Deals Bot Started")
+    print("🚀 Cuelinks + RSS Interceptor Bot Started!")
     asyncio.run(run_bot())
