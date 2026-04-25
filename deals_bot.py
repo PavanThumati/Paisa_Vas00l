@@ -3,6 +3,8 @@ import requests
 import cloudscraper
 import asyncio
 import os
+import re
+import urllib.parse
 from bs4 import BeautifulSoup
 from telegram import Bot
 from datetime import datetime
@@ -13,6 +15,7 @@ from datetime import datetime
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID", "-100xxxxxxxxxx")
 CUELINKS_API_TOKEN = os.getenv("CUELINKS_API_TOKEN", "your_api_token_here")
+AMAZON_TAG = os.getenv("AMAZON_TAG", "yourtag-21") # Crucial for direct Amazon links
 
 if not BOT_TOKEN:
     print("❌ BOT_TOKEN missing")
@@ -35,52 +38,73 @@ def save_posted_deal(deal_id):
         f.write(f"{deal_id}\n")
 
 # -----------------------------
-# LINK PROCESSING
+# LINK PROCESSING & ROUTING
 # -----------------------------
-def get_clean_destination_url(short_url):
-    """Follows deep links (like amzn.to) to get the raw e-commerce URL."""
+def get_clean_destination_url(url):
+    """Unwraps blog redirectors (like visit.php?go=) and gets the pure URL."""
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept-Language": "en-US,en;q=0.9"
-        }
-        response = requests.head(short_url, allow_redirects=True, headers=headers, timeout=10)
-        return response.url.split('?')[0] 
+        # 1. Unwrap redirect parameters from deal blogs
+        if "go=" in url or "url=" in url:
+            parsed = urllib.parse.urlparse(url)
+            qs = urllib.parse.parse_qs(parsed.query)
+            for param in ['go', 'url']:
+                if param in qs:
+                    url = qs[param][0]
+                    break
+        
+        # 2. Follow shortlinks (amzn.to, fkrt.it) to their final destination
+        headers = {"User-Agent": "Mozilla/5.0"}
+        response = requests.head(url, allow_redirects=True, headers=headers, timeout=10)
+        clean_url = response.url.split('?')[0] # Strip existing tracking garbage
+        return clean_url
     except:
-        return short_url
+        return url
+
+def generate_amazon_affiliate_url(raw_url):
+    """Bypasses Cuelinks to give you 100% direct Amazon commission."""
+    match = re.search(r'/([A-Z0-9]{10})(?:[/?]|$)', raw_url)
+    if match:
+        asin = match.group(1)
+        return f"https://www.amazon.in/dp/{asin}?tag={AMAZON_TAG}"
+    return raw_url
 
 def generate_cuelinks_api_url(raw_url):
-    """Generates the monetized shortlink via Cuelinks API."""
-    # NOTE: Verify this endpoint in your Cuelinks APIary documentation if it continues to 404
+    """Fallback for Flipkart, Myntra, etc."""
     api_endpoint = "https://www.cuelinks.com/api/v2/get_link"
-    
-    headers = {
-        "token": CUELINKS_API_TOKEN,
-        "Content-Type": "application/json"
-    }
-    
-    payload = {
-        "url": raw_url
-    }
+    headers = {"token": CUELINKS_API_TOKEN, "Content-Type": "application/json"}
+    payload = {"url": raw_url}
     
     try:
-        # Changed to POST, which is standard for link generation APIs
         response = requests.post(api_endpoint, headers=headers, json=payload, timeout=10)
-        
         if response.status_code == 200:
             data = response.json()
             return data.get('short_url') or data.get('affiliate_url', raw_url)
-        else:
-            # Prevents dumping massive HTML error pages into your logs
-            print(f"⚠️ API Error (Status {response.status_code}): Check your Cuelinks API endpoint URL.")
-            return raw_url
-            
-    except Exception as e:
-        print(f"⚠️ API Request Failed: {e}")
+        return raw_url
+    except:
         return raw_url
 
+def get_tiny_url(long_url):
+    """Creates a shortlink natively without extra libraries."""
+    try:
+        res = requests.get(f"https://tinyurl.com/api-create.php?url={long_url}", timeout=10)
+        if res.status_code == 200:
+            return res.text
+    except:
+        pass
+    return long_url
+
 # -----------------------------
-# RSS INTERCEPTOR (DEEP SCRAPE)
+# DATA EXTRACTION
+# -----------------------------
+def extract_price(text):
+    """Hunts for Rs. or ₹ in the title."""
+    match = re.search(r'(?:Rs\.?|₹)\s*([\d,]+)', text, re.IGNORECASE)
+    if match:
+        return f"₹{match.group(1)}"
+    return "₹Check Link"
+
+# -----------------------------
+# RSS INTERCEPTOR (THE ENGINE)
 # -----------------------------
 async def hunt_and_post():
     rss_sources = [
@@ -89,14 +113,11 @@ async def hunt_and_post():
     ]
     
     posted_deals = get_posted_deals()
-    
-    scraper = cloudscraper.create_scraper(
-        browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
-    )
+    scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True})
     
     supported_stores = [
         'amazon.in', 'amzn.to', 'flipkart.com', 'fkrt.it', 'myntra.com', 
-        'ajio.com', 'tatacliq.com', 'croma.com', 'reliancedigital.in', 'nykaa.com'
+        'ajio.com', 'tatacliq.com', 'croma.com', 'nykaa.com'
     ]
 
     new_finds = 0
@@ -105,66 +126,80 @@ async def hunt_and_post():
         try:
             response = scraper.get(rss_url, timeout=20)
             feed = feedparser.parse(response.content)
-            
-            if not feed.entries:
-                continue
-                
-        except Exception as e:
-            print(f"⚠️ Feed fetch failed for {rss_url}: {e}")
+            if not feed.entries: continue
+        except:
             continue
 
         for entry in feed.entries:
             deal_id = entry.id if hasattr(entry, 'id') else entry.link
+            if deal_id in posted_deals: continue
             
-            if deal_id in posted_deals:
-                continue
-            
+            title = entry.title
             deal_page_url = entry.link
             target_url = None
+            image_url = None
+            price = extract_price(title)
 
-            # Deep Scrape: Visit the actual deal page to find the Buy link
+            # Deep Scrape: Visit the deal page
             try:
                 page_res = scraper.get(deal_page_url, timeout=15)
                 soup = BeautifulSoup(page_res.text, "html.parser")
                 
-                # Search all hyperlinks on the page
+                # 1. Grab the product image
+                img_tag = soup.find('img')
+                if img_tag and img_tag.get('src'):
+                    image_url = img_tag['src']
+                
+                # 2. Grab the store link
                 for a_tag in soup.find_all('a', href=True):
                     href = a_tag['href']
-                    if any(store in href.lower() for store in supported_stores):
-                        target_url = href
+                    # Check the un-encoded version of the link just in case
+                    unwrapped = urllib.parse.unquote(href)
+                    if any(store in unwrapped.lower() for store in supported_stores):
+                        target_url = unwrapped
                         break 
                         
             except Exception as e:
-                print(f"⚠️ Failed to load deal page {deal_page_url}: {e}")
+                print(f"⚠️ Failed to scrape page: {e}")
                 continue
 
-            if target_url:
-                new_finds += 1
-                print(f"🎯 STORE LINK FOUND: {target_url}")
-                
-                # Clean the shortlink (e.g. amzn.to -> amazon.in) before sending to Cuelinks
+            if target_url and image_url:
                 clean_url = get_clean_destination_url(target_url)
                 
-                # Monetize via API
-                api_short_link = generate_cuelinks_api_url(clean_url)
+                # ROUTING LOGIC: Amazon vs Cuelinks
+                if 'amazon.in' in clean_url.lower() or 'amzn.to' in clean_url.lower():
+                    print(f"🎯 AMAZON DEAL FOUND! Generating direct Amazon Tag...")
+                    affiliated_long_url = generate_amazon_affiliate_url(clean_url)
+                else:
+                    print(f"🎯 OTHER DEAL FOUND! Routing to Cuelinks API...")
+                    affiliated_long_url = generate_cuelinks_api_url(clean_url)
 
-                msg = f"🔥 <b>Trending Loot Alert!</b>\n\n"
-                msg += f"📦 Limited Time Deal Unlocked\n\n"
-                msg += f"🛒 <b>Grab it here:</b> {api_short_link}"
+                # Generate the Shortlink
+                short_link = get_tiny_url(affiliated_long_url)
+
+                # Format the message exactly like the requested screenshot
+                # Generic description formatting maintained
+                msg = f"🔥🔥 {title}\n\n"
+                msg += f"🎁 Deal Price : {price}\n\n"
+                msg += f"Buy Here : {short_link}\n\n"
+                msg += f"⚡⚡ Apply Coupon (If applicable)\n"
 
                 try:
-                    await bot.send_message(
+                    # Send as an Image Post
+                    await bot.send_photo(
                         chat_id=CHANNEL_ID,
-                        text=msg,
-                        parse_mode="HTML",
-                        disable_web_page_preview=False
+                        photo=image_url,
+                        caption=msg,
+                        parse_mode="HTML"
                     )
                     print(f"✅ Posted successfully!")
                     save_posted_deal(deal_id)
+                    new_finds += 1
                     await asyncio.sleep(4) 
                 except Exception as e:
-                    print(f"❌ Telegram Error: {e}")
+                    print(f"❌ Telegram Error (Photo might be invalid): {e}")
             else:
+                # Mark as scanned even if no valid store links were found
                 save_posted_deal(deal_id)
 
     if new_finds > 0:
@@ -181,6 +216,6 @@ async def run_bot():
         await asyncio.sleep(60) 
 
 if __name__ == "__main__":
-    print("🚀 Deep-Scraping Auto-Deal Bot Started!")
+    print("🚀 Auto-Deal Bot Started (Direct Amazon + Cuelinks Fallback)!")
     asyncio.run(run_bot())
     
