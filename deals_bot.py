@@ -3,7 +3,7 @@ import requests
 import cloudscraper
 import asyncio
 import os
-import re
+from bs4 import BeautifulSoup
 from telegram import Bot
 from datetime import datetime
 
@@ -38,7 +38,7 @@ def save_posted_deal(deal_id):
 # LINK PROCESSING
 # -----------------------------
 def get_clean_destination_url(short_url):
-    """Follows deep links and internal redirects to get the raw e-commerce URL."""
+    """Follows deep links (like amzn.to) to get the raw e-commerce URL."""
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -75,10 +75,9 @@ def generate_cuelinks_api_url(raw_url):
         return raw_url
 
 # -----------------------------
-# RSS INTERCEPTOR (MULTI-SOURCE)
+# RSS INTERCEPTOR (DEEP SCRAPE)
 # -----------------------------
 async def hunt_and_post():
-    # Utilizing much more stable WordPress-based deal feeds
     rss_sources = [
         "https://indiafreestuff.in/feed/",
         "https://www.savemoneyindia.com/feed/"
@@ -90,9 +89,10 @@ async def hunt_and_post():
         browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
     )
     
+    # Notice we added shortlink domains like amzn.to and fkrt.it
     supported_stores = [
-        'amazon.in', 'flipkart.com', 'myntra.com', 'ajio.com', 
-        'tatacliq.com', 'croma.com', 'reliancedigital.in', 'nykaa.com'
+        'amazon.in', 'amzn.to', 'flipkart.com', 'fkrt.it', 'myntra.com', 
+        'ajio.com', 'tatacliq.com', 'croma.com', 'reliancedigital.in', 'nykaa.com'
     ]
 
     new_finds = 0
@@ -114,33 +114,37 @@ async def hunt_and_post():
             
             if deal_id in posted_deals:
                 continue
-                
-            # Combine summary and content to hunt for links
-            content_block = entry.description
-            if hasattr(entry, 'content'):
-                content_block += str(entry.content[0].value)
             
-            # Use Regex to extract all href URLs from the post content
-            extracted_urls = re.findall(r'href=[\'"]?([^\'" >]+)', content_block)
-            
+            deal_page_url = entry.link
             target_url = None
-            for url in extracted_urls:
-                # Skip obvious image files to save processing time
-                if any(ext in url.lower() for ext in ['.jpg', '.png', '.gif', '.jpeg']):
-                    continue
-                    
-                clean = get_clean_destination_url(url)
-                if any(store in clean.lower() for store in supported_stores):
-                    target_url = clean
-                    break # Stop looking once we find a valid store link
-            
+
+            # Deep Scrape: Visit the actual deal page to find the Buy link
+            try:
+                page_res = scraper.get(deal_page_url, timeout=15)
+                soup = BeautifulSoup(page_res.text, "html.parser")
+                
+                # Search all hyperlinks on the page
+                for a_tag in soup.find_all('a', href=True):
+                    href = a_tag['href']
+                    if any(store in href.lower() for store in supported_stores):
+                        target_url = href
+                        break # Found the store link, stop searching this page
+                        
+            except Exception as e:
+                print(f"⚠️ Failed to load deal page {deal_page_url}: {e}")
+                continue
+
+            # If we successfully extracted a store link from the page
             if target_url:
                 new_finds += 1
-                print(f"🎯 NEW MATCH Found! Generating API link...")
+                print(f"🎯 STORE LINK FOUND: {target_url}")
                 
-                api_short_link = generate_cuelinks_api_url(target_url)
+                # Clean the shortlink (e.g. amzn.to -> amazon.in) before sending to Cuelinks
+                clean_url = get_clean_destination_url(target_url)
+                
+                # Monetize via API
+                api_short_link = generate_cuelinks_api_url(clean_url)
 
-                # Strict generic formatting without brand identifiers
                 msg = f"🔥 <b>Trending Loot Alert!</b>\n\n"
                 msg += f"📦 Limited Time Deal Unlocked\n\n"
                 msg += f"🛒 <b>Grab it here:</b> {api_short_link}"
@@ -154,11 +158,11 @@ async def hunt_and_post():
                     )
                     print(f"✅ Posted successfully!")
                     save_posted_deal(deal_id)
-                    await asyncio.sleep(4) # Anti-spam pause
+                    await asyncio.sleep(4) 
                 except Exception as e:
                     print(f"❌ Telegram Error: {e}")
             else:
-                # If we couldn't find a supported store link, save it so we don't scan it again
+                # Only mark it as seen if we scanned the page and there were no supported links
                 save_posted_deal(deal_id)
 
     if new_finds > 0:
@@ -169,12 +173,12 @@ async def hunt_and_post():
 # -----------------------------
 async def run_bot():
     while True:
-        print(f"\n⚡ [{datetime.now().strftime('%H:%M:%S')}] Fetching latest deals...")
+        print(f"\n⚡ [{datetime.now().strftime('%H:%M:%S')}] Scanning feeds & deep-scraping pages...")
         await hunt_and_post()
         print("⏳ Waiting 60 seconds...\n")
         await asyncio.sleep(60) 
 
 if __name__ == "__main__":
-    print("🚀 Multi-Source Auto-Deal Bot Started!")
+    print("🚀 Deep-Scraping Auto-Deal Bot Started!")
     asyncio.run(run_bot())
     
