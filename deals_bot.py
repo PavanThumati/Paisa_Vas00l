@@ -51,23 +51,28 @@ def get_clean_destination_url(short_url):
 
 def generate_cuelinks_api_url(raw_url):
     """Generates the monetized shortlink via Cuelinks API."""
+    # NOTE: Verify this endpoint in your Cuelinks APIary documentation if it continues to 404
     api_endpoint = "https://www.cuelinks.com/api/v2/get_link"
     
     headers = {
-        "token": CUELINKS_API_TOKEN
+        "token": CUELINKS_API_TOKEN,
+        "Content-Type": "application/json"
     }
-    params = {
+    
+    payload = {
         "url": raw_url
     }
     
     try:
-        response = requests.get(api_endpoint, headers=headers, params=params, timeout=10)
+        # Changed to POST, which is standard for link generation APIs
+        response = requests.post(api_endpoint, headers=headers, json=payload, timeout=10)
         
         if response.status_code == 200:
             data = response.json()
             return data.get('short_url') or data.get('affiliate_url', raw_url)
         else:
-            print(f"⚠️ API Error: {response.text}")
+            # Prevents dumping massive HTML error pages into your logs
+            print(f"⚠️ API Error (Status {response.status_code}): Check your Cuelinks API endpoint URL.")
             return raw_url
             
     except Exception as e:
@@ -89,7 +94,6 @@ async def hunt_and_post():
         browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
     )
     
-    # Notice we added shortlink domains like amzn.to and fkrt.it
     supported_stores = [
         'amazon.in', 'amzn.to', 'flipkart.com', 'fkrt.it', 'myntra.com', 
         'ajio.com', 'tatacliq.com', 'croma.com', 'reliancedigital.in', 'nykaa.com'
@@ -128,13 +132,12 @@ async def hunt_and_post():
                     href = a_tag['href']
                     if any(store in href.lower() for store in supported_stores):
                         target_url = href
-                        break # Found the store link, stop searching this page
+                        break 
                         
             except Exception as e:
                 print(f"⚠️ Failed to load deal page {deal_page_url}: {e}")
                 continue
 
-            # If we successfully extracted a store link from the page
             if target_url:
                 new_finds += 1
                 print(f"🎯 STORE LINK FOUND: {target_url}")
@@ -162,7 +165,6 @@ async def hunt_and_post():
                 except Exception as e:
                     print(f"❌ Telegram Error: {e}")
             else:
-                # Only mark it as seen if we scanned the page and there were no supported links
                 save_posted_deal(deal_id)
 
     if new_finds > 0:
