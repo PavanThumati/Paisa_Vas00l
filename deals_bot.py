@@ -33,45 +33,34 @@ USER_AGENTS = [
 ]
 
 # -----------------------------
-# AMAZON SCRAPER (RETRY + SAFE)
+# AMAZON SCRAPER (WITH FALLBACK)
 # -----------------------------
 def get_amazon_deals(query):
     url = f"https://www.amazon.in/s?k={query.replace(' ', '+')}&tag={AMAZON_TAG}"
 
     headers = {
         "User-Agent": random.choice(USER_AGENTS),
-        "Accept-Language": "en-IN,en;q=0.9",
-        "Connection": "keep-alive"
+        "Accept-Language": "en-IN,en;q=0.9"
     }
 
     try:
-        # Human-like delay
         time.sleep(random.uniform(6, 12))
 
-        res = None
+        res = scraper.get(url, headers=headers, timeout=20)
 
-        # 🔁 Retry logic
-        for attempt in range(2):
-            res = scraper.get(url, headers=headers, timeout=20)
-
-            if res.status_code == 200:
-                break
-            else:
-                print(f"⚠️ Blocked ({res.status_code}) → retry {attempt+1}")
-                time.sleep(random.uniform(5, 10))
-
-        # ❌ Still blocked
-        if not res or res.status_code != 200:
-            print("❌ Skipping blocked query")
-            return []
+        # ❌ HARD BLOCK → fallback
+        if res.status_code == 503:
+            print("❌ Amazon blocked → fallback")
+            return [(f"Top {query} Deals", "₹Check", url)]
 
         soup = BeautifulSoup(res.text, "html.parser")
 
-        products = soup.find_all("div", {"data-component-type": "s-search-result"})[:3]
+        products = soup.find_all("div", {"data-component-type": "s-search-result"})[:2]
 
+        # ⚠️ SOFT BLOCK → fallback
         if not products:
-            print("⚠️ No products found (soft block)")
-            return []
+            print("⚠️ No products → fallback")
+            return [(f"Best {query}", "₹Check", url)]
 
         deals = []
         for p in products:
@@ -91,7 +80,8 @@ def get_amazon_deals(query):
 
     except Exception as e:
         print(f"❌ Scrape error: {e}")
-        return []
+        return [(f"Deals for {query}", "₹Check", url)]
+
 
 # -----------------------------
 # TELEGRAM SENDER
@@ -99,12 +89,12 @@ def get_amazon_deals(query):
 async def send_deals(deals):
     for title, price, link in deals:
         try:
-            msg = f"""🔥 <b>Amazon Deal</b>
+            msg = f"""🔥 <b>Best Deal</b>
 
 {title}
-<b>{price}</b>
+💰 <b>{price}</b>
 
-🛒 <a href="{link}">Buy Now</a>
+🛒 <a href="{link}">View Deal</a>
 """
 
             await bot.send_message(
@@ -120,12 +110,12 @@ async def send_deals(deals):
         except Exception as e:
             print(f"❌ Telegram error: {e}")
 
+
 # -----------------------------
 # MAIN LOOP
 # -----------------------------
 async def run_bot():
     categories = [
-        # (KEEPING ALL YOUR CATEGORIES SAME)
         "smartphones under 20000","smartphones under 15000",
         "gaming laptops under 60000","laptop under 50000",
         "wireless earbuds anc","bluetooth earphones under 1000",
@@ -171,21 +161,21 @@ async def run_bot():
     while True:
         print(f"\n🚀 {datetime.now().strftime('%H:%M')}")
 
-        # Keep categories, reduce frequency
         selected = random.sample(categories, 2)
 
         for query in selected:
             print(f"🔍 {query}")
 
             deals = get_amazon_deals(query)
-            if deals:
-                await send_deals(deals)
 
-            # 👇 extra delay between queries
+            # ✅ ALWAYS POST (even fallback)
+            await send_deals(deals)
+
             await asyncio.sleep(random.uniform(10, 20))
 
         print("😴 Sleeping 10 minutes...\n")
         await asyncio.sleep(600)
+
 
 # -----------------------------
 # START
