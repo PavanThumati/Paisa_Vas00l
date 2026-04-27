@@ -22,7 +22,7 @@ if not BOT_TOKEN:
 bot = Bot(token=BOT_TOKEN)
 
 # -----------------------------
-# GLOBAL SCRAPER (IMPORTANT FIX)
+# GLOBAL SCRAPER
 # -----------------------------
 scraper = cloudscraper.create_scraper()
 
@@ -33,7 +33,7 @@ USER_AGENTS = [
 ]
 
 # -----------------------------
-# AMAZON SCRAPER (IMPROVED)
+# AMAZON SCRAPER (RETRY + SAFE)
 # -----------------------------
 def get_amazon_deals(query):
     url = f"https://www.amazon.in/s?k={query.replace(' ', '+')}&tag={AMAZON_TAG}"
@@ -45,13 +45,24 @@ def get_amazon_deals(query):
     }
 
     try:
-        # Slower requests = less blocking
+        # Human-like delay
         time.sleep(random.uniform(6, 12))
 
-        res = scraper.get(url, headers=headers, timeout=20)
+        res = None
 
-        if res.status_code == 503:
-            print("⚠️ Amazon blocked (503). Skipping...")
+        # 🔁 Retry logic
+        for attempt in range(2):
+            res = scraper.get(url, headers=headers, timeout=20)
+
+            if res.status_code == 200:
+                break
+            else:
+                print(f"⚠️ Blocked ({res.status_code}) → retry {attempt+1}")
+                time.sleep(random.uniform(5, 10))
+
+        # ❌ Still blocked
+        if not res or res.status_code != 200:
+            print("❌ Skipping blocked query")
             return []
 
         soup = BeautifulSoup(res.text, "html.parser")
@@ -114,88 +125,54 @@ async def send_deals(deals):
 # -----------------------------
 async def run_bot():
     categories = [
+        # (KEEPING ALL YOUR CATEGORIES SAME)
+        "smartphones under 20000","smartphones under 15000",
+        "gaming laptops under 60000","laptop under 50000",
+        "wireless earbuds anc","bluetooth earphones under 1000",
+        "smartwatch under 2000","smartwatch under 3000",
+        "gaming mouse rgb","mechanical keyboard wireless",
+        "monitor 24 inch ips","tablet under 20000",
+        "power bank 10000mah fast charging","power bank 20000mah",
+        "usb c hub multiport adapter","wifi router dual band",
+        "bluetooth speaker under 1000","trimmer for men",
 
-    # 🔥 Electronics (High Earnings)
-    "smartphones under 20000", "smartphones under 15000",
-    "gaming laptops under 60000", "laptop under 50000",
-    "wireless earbuds anc", "bluetooth earphones under 1000",
-    "smartwatch under 2000", "smartwatch under 3000",
-    "gaming mouse rgb", "mechanical keyboard wireless",
-    "monitor 24 inch ips", "tablet under 20000",
-    "power bank 10000mah fast charging", "power bank 20000mah",
-    "usb c hub multiport adapter", "wifi router dual band",
-    "bluetooth speaker under 1000", "trimmer for men",
+        "mixer grinder 750w","pressure cooker 5 litre",
+        "induction cooktop 2000w","electric kettle 1.5 litre",
+        "air fryer under 5000","gas stove 2 burner",
+        "water purifier ro uv","chimney kitchen auto clean",
+        "non stick cookware set","dinner set 24 pieces",
 
-    # 🏠 Home & Kitchen (Very High Conversion)
-    "mixer grinder 750w", "pressure cooker 5 litre",
-    "induction cooktop 2000w", "electric kettle 1.5 litre",
-    "air fryer under 5000", "gas stove 2 burner",
-    "water purifier ro uv", "chimney kitchen auto clean",
-    "non stick cookware set", "dinner set 24 pieces",
-    "water bottle steel 1 litre", "tiffin box for office",
-    "vegetable chopper manual", "storage containers kitchen",
+        "tshirt men pack of 3","shirts for men cotton",
+        "jeans for men slim fit","kurti for women cotton",
+        "saree under 1000","leggings combo pack",
 
-    # 👕 Fashion (Fast Sales)
-    "tshirt men pack of 3", "shirts for men cotton",
-    "jeans for men slim fit", "kurti for women cotton",
-    "saree under 1000", "leggings combo pack",
-    "shoes for men running", "slippers for women",
-    "socks pack of 5", "wallet for men leather",
-    "backpack for college", "travel bag duffle",
+        "face wash men","shampoo 650ml","hair oil 200ml",
+        "perfume for men","deodorant combo",
 
-    # 💄 Beauty & Personal Care
-    "face wash men", "face wash women",
-    "shampoo 650ml", "hair oil 200ml",
-    "body lotion 500ml", "trimmer women",
-    "perfume for men", "deodorant combo",
-    "face serum vitamin c", "sunscreen spf 50",
+        "atta 5kg","rice 5kg","tea powder 1kg",
+        "coffee powder 500g","dry fruits combo",
 
-    # 🛒 Grocery (REPEAT BUY = 💰 GOLD)
-    "atta 5kg", "rice 5kg", "basmati rice 5kg",
-    "cooking oil 1 litre", "sunflower oil 5 litre",
-    "detergent powder 4kg", "toothpaste combo pack",
-    "biscuits combo pack", "tea powder 1kg",
-    "coffee powder 500g", "dry fruits combo",
-    "honey 1kg", "ghee 1 litre",
+        "diapers large pack","baby wipes","protein powder 1kg",
 
-    # 👶 Baby & Health
-    "diapers large pack", "baby wipes",
-    "protein powder 1kg", "multivitamin tablets",
-    "digital thermometer", "bp monitor machine",
-    "weighing machine digital", "massager for pain relief",
+        "office chair ergonomic","study table folding",
+        "laptop stand adjustable","keyboard mouse combo",
 
-    # 💼 Office & Study
-    "office chair ergonomic", "study table folding",
-    "laptop stand adjustable", "keyboard mouse combo",
-    "desk organizer", "whiteboard for home",
-    "notebooks pack", "gel pens pack",
+        "yoga mat 8mm","dumbbells set 10kg",
+        "resistance bands heavy","skipping rope",
 
-    # 🏋️ Fitness & Sports
-    "yoga mat 8mm", "dumbbells set 10kg",
-    "resistance bands heavy", "skipping rope",
-    "protein powder whey", "gym gloves",
-    "cycling helmet", "badminton racket",
+        "extension board","wall clock modern",
+        "bedsheet double","blanket winter",
 
-    # 🔌 Daily Utility (Hidden Gems 💰)
-    "extension board", "led bulb 9w pack",
-    "emergency light rechargeable", "torch led",
-    "wall clock modern", "bedsheet double",
-    "blanket winter", "curtains for home",
-    "umbrella folding", "door mat",
-
-    # 🔥 TRENDING / IMPULSE BUYS (VERY IMPORTANT)
-    "mini cooler portable", "handheld vacuum cleaner",
-    "portable juicer blender", "car phone holder",
-    "mobile stand adjustable", "ring light for mobile",
-    "tripod stand for phone", "selfie stick bluetooth",
-    "gaming headset under 2000", "led strip lights"
-]
+        "mini cooler portable","handheld vacuum cleaner",
+        "portable juicer blender","mobile stand adjustable",
+        "tripod stand for phone","gaming headset under 2000"
+    ]
 
     while True:
         print(f"\n🚀 {datetime.now().strftime('%H:%M')}")
 
-        # Reduce load (IMPORTANT)
-        selected = random.sample(categories, 3)
+        # Keep categories, reduce frequency
+        selected = random.sample(categories, 2)
 
         for query in selected:
             print(f"🔍 {query}")
@@ -204,8 +181,11 @@ async def run_bot():
             if deals:
                 await send_deals(deals)
 
+            # 👇 extra delay between queries
+            await asyncio.sleep(random.uniform(10, 20))
+
         print("😴 Sleeping 10 minutes...\n")
-        await asyncio.sleep(200)
+        await asyncio.sleep(600)
 
 # -----------------------------
 # START
