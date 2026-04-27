@@ -174,7 +174,7 @@ async def run_bot():
             await asyncio.sleep(random.uniform(10, 20))
 
         print("😴 Sleeping 10 minutes...\n")
-        await asyncio.sleep(600)
+        await asyncio.sleep(100)
 
 
 # -----------------------------
