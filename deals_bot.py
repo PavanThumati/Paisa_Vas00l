@@ -34,7 +34,7 @@ def get_amazon_deals(query):
     try:
         time.sleep(random.uniform(2, 4))  # avoid blocking
         res = requests.get(url, headers=headers, timeout=20)
-        soup = BeautifulSoup(res.text, "lxml")
+        soup = BeautifulSoup(res.text, "html.parser")
 
         products = soup.find_all("div", {"data-component-type": "s-search-result"})[:3]
 
