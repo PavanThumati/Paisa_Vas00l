@@ -21,22 +21,35 @@ if not BOT_TOKEN:
 bot = Bot(token=BOT_TOKEN)
 
 # -----------------------------
-# AMAZON SCRAPER
+# AMAZON SCRAPER (CLOUDSCRAPER UPGRADE)
 # -----------------------------
 def get_amazon_deals(query):
     url = f"https://www.amazon.in/s?k={query.replace(' ', '+')}&tag={AMAZON_TAG}"
 
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Accept-Language": "en-IN,en;q=0.9"
-    }
-
     try:
-        time.sleep(random.uniform(2, 4))  # avoid blocking
-        res = requests.get(url, headers=headers, timeout=20)
+        # Random sleep to mimic human behavior
+        time.sleep(random.uniform(3, 6))  
+        
+        # Use cloudscraper instead of basic requests to bypass CAPTCHAs
+        scraper = cloudscraper.create_scraper(
+            browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
+        )
+        
+        res = scraper.get(url, timeout=20)
+        
+        # If Amazon throws a 503 Service Unavailable, it means they served a CAPTCHA
+        if res.status_code != 200:
+            print(f"⚠️ Amazon Blocked Request! Status Code: {res.status_code}")
+            return []
+
         soup = BeautifulSoup(res.text, "html.parser")
 
         products = soup.find_all("div", {"data-component-type": "s-search-result"})[:3]
+        
+        # Debug alert if the page loaded but no products were found
+        if not products:
+            print(f"⚠️ Page loaded, but 0 products found. Layout might have changed.")
+            return []
 
         deals = []
         for p in products:
@@ -57,7 +70,6 @@ def get_amazon_deals(query):
     except Exception as e:
         print(f"❌ Scrape error: {e}")
         return []
-
 
 # -----------------------------
 # TELEGRAM SENDER (HTML SAFE)
