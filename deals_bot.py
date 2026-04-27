@@ -1,230 +1,193 @@
-import feedparser
 import requests
-import cloudscraper
-import asyncio
-import os
-import re
-import urllib.parse
 from bs4 import BeautifulSoup
-from telegram import Bot
+import os
+import random
+import asyncio
+import time
 from datetime import datetime
+from telegram import Bot
 
 # -----------------------------
 # ENV VARIABLES
 # -----------------------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = os.getenv("CHANNEL_ID", "-100xxxxxxxxxx")
-AMAZON_TAG = os.getenv("AMAZON_TAG", "yourtag-21") 
+CHANNEL_ID = int(os.getenv("CHANNEL_ID", "-100xxxxxxxxxx"))
+AMAZON_TAG = os.getenv("AMAZON_TAG", "yourtag-21")
 
 if not BOT_TOKEN:
     print("❌ BOT_TOKEN missing")
     exit()
 
 bot = Bot(token=BOT_TOKEN)
-POSTED_FILE = "posted_deals.txt"
 
 # -----------------------------
-# STATE MANAGEMENT
+# AMAZON SCRAPER
 # -----------------------------
-def get_posted_deals():
-    if os.path.exists(POSTED_FILE):
-        with open(POSTED_FILE, "r") as f:
-            return set(f.read().splitlines())
-    return set()
+def get_amazon_deals(query):
+    url = f"https://www.amazon.in/s?k={query.replace(' ', '+')}&tag={AMAZON_TAG}"
 
-def save_posted_deal(deal_id):
-    with open(POSTED_FILE, "a") as f:
-        f.write(f"{deal_id}\n")
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept-Language": "en-IN,en;q=0.9"
+    }
 
-# -----------------------------
-# LINK PROCESSING (AMAZON ONLY)
-# -----------------------------
-def is_valid_amazon_link(url):
-    """Strictly filters out category pages and non-Amazon links."""
-    url_lower = url.lower()
-    
-    # Must be Amazon
-    if 'amazon.in' not in url_lower and 'amzn.to' not in url_lower:
-        return False
-        
-    # Block generic sale/category indicators completely
-    invalid_patterns = ['/b?', '/stores/', '/h/rewards/', '/offers-list/', '/category/']
-    if any(pattern in url_lower for pattern in invalid_patterns):
-        return False
-        
-    # Must contain a specific product identifier
-    valid_patterns = ['/dp/', '/gp/product/', 'amzn.to', '/p/']
-    if any(pattern in url_lower for pattern in valid_patterns):
-        return True
-        
-    return False
-
-def get_clean_destination_url(url):
-    """Unwraps blog redirectors to get the pure URL."""
     try:
-        if "go=" in url or "url=" in url:
-            parsed = urllib.parse.urlparse(url)
-            qs = urllib.parse.parse_qs(parsed.query)
-            for param in ['go', 'url']:
-                if param in qs:
-                    url = qs[param][0]
-                    break
-        
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.head(url, allow_redirects=True, headers=headers, timeout=10)
-        return response.url.split('?')[0] 
-    except:
-        return url
+        time.sleep(random.uniform(2, 4))  # avoid blocking
+        res = requests.get(url, headers=headers, timeout=20)
+        soup = BeautifulSoup(res.text, "lxml")
 
-def generate_amazon_affiliate_url(raw_url):
-    """Extracts ASIN and injects your personal affiliate tag."""
-    match = re.search(r'/([A-Z0-9]{10})(?:[/?]|$)', raw_url)
-    if match:
-        asin = match.group(1)
-        return f"https://www.amazon.in/dp/{asin}?tag={AMAZON_TAG}"
-    return raw_url
+        products = soup.find_all("div", {"data-component-type": "s-search-result"})[:3]
 
-def get_tiny_url(long_url):
-    """Creates a clean shortlink natively."""
-    try:
-        res = requests.get(f"https://tinyurl.com/api-create.php?url={long_url}", timeout=10)
-        if res.status_code == 200:
-            return res.text
-    except:
-        pass
-    return long_url
+        deals = []
+        for p in products:
+            title_tag = p.find("h2")
+            title = title_tag.text.strip() if title_tag else None
+
+            price_tag = p.find("span", class_="a-price-whole")
+            price = f"₹{price_tag.text}" if price_tag else "₹Check"
+
+            link_tag = p.find("a", class_="a-link-normal")
+            link = "https://amazon.in" + link_tag["href"] if link_tag else url
+
+            if title:
+                deals.append((title[:100], price, link))
+
+        return deals
+
+    except Exception as e:
+        print(f"❌ Scrape error: {e}")
+        return []
+
 
 # -----------------------------
-# DATA EXTRACTION
+# TELEGRAM SENDER (HTML SAFE)
 # -----------------------------
-def extract_price(text):
-    """Hunts for Rs. or ₹ in the title."""
-    match = re.search(r'(?:Rs\.?|₹)\s*([\d,]+)', text, re.IGNORECASE)
-    if match:
-        return f"₹{match.group(1)}"
-    return "₹Check Link"
-
-# -----------------------------
-# RSS INTERCEPTOR 
-# -----------------------------
-async def hunt_and_post():
-    rss_sources = [
-        "https://indiafreestuff.in/feed/",
-        "https://www.savemoneyindia.com/feed/"
-    ]
-    
-    posted_deals = get_posted_deals()
-    scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True})
-    
-    new_finds = 0
-
-    for rss_url in rss_sources:
+async def send_deals(deals):
+    for title, price, link in deals:
         try:
-            response = scraper.get(rss_url, timeout=20)
-            feed = feedparser.parse(response.content)
-            if not feed.entries: continue
-        except:
-            continue
+            msg = f"""🔥 <b>Amazon Deal</b>
 
-        for entry in feed.entries:
-            deal_id = entry.id if hasattr(entry, 'id') else entry.link
-            if deal_id in posted_deals: continue
-            
-            title = entry.title
-            deal_page_url = entry.link
-            target_url = None
-            image_url = None
-            price = extract_price(title)
+{title}
+<b>{price}</b>
 
-            try:
-                page_res = scraper.get(deal_page_url, timeout=15)
-                soup = BeautifulSoup(page_res.text, "html.parser")
-                
-                # 1. SMART IMAGE TARGETING
-                content_area = soup.find('div', class_=re.compile(r'entry-content|post-content|content', re.IGNORECASE))
-                if content_area:
-                    for img in content_area.find_all('img'):
-                        src = img.get('src', '')
-                        if src and 'logo' not in src.lower() and not src.startswith('data:image'):
-                            image_url = src
-                            break
-                
-                if not image_url:
-                    for img in soup.find_all('img'):
-                        src = img.get('src', '')
-                        if src and 'logo' not in src.lower() and not src.startswith('data:image'):
-                            image_url = src
-                            break
+🛒 <a href="{link}">Buy Now</a>
+"""
 
-                # 2. Grab Amazon Link Only
-                for a_tag in soup.find_all('a', href=True):
-                    href = a_tag['href']
-                    unwrapped = urllib.parse.unquote(href)
-                    
-                    if is_valid_amazon_link(unwrapped):
-                        target_url = unwrapped
-                        break 
-                        
-            except Exception as e:
-                print(f"⚠️ Failed to scrape page: {e}")
-                continue
+            await bot.send_message(
+                chat_id=CHANNEL_ID,
+                text=msg,
+                parse_mode="HTML",  # ✅ no errors
+                disable_web_page_preview=False
+            )
 
-            # Only proceed if we found a valid Amazon product link
-            if target_url:
-                clean_url = get_clean_destination_url(target_url)
-                print(f"🎯 AMAZON PRODUCT FOUND! Generating tag...")
-                
-                affiliated_long_url = generate_amazon_affiliate_url(clean_url)
-                short_link = get_tiny_url(affiliated_long_url)
+            print(f"✅ Posted: {title[:40]}")
+            await asyncio.sleep(3)
 
-                # Strict generic formatting, no brand identifiers in text per rules
-                msg = f"🔥🔥 {title}\n\n"
-                msg += f"🎁 Deal Price : {price}\n\n"
-                msg += f"Buy Here : {short_link}\n\n"
-                msg += f"⚡⚡ Apply Coupon (If applicable)\n"
+        except Exception as e:
+            print(f"❌ Telegram error: {e}")
 
-                try:
-                    # Attempt to send with photo first
-                    if image_url:
-                        await bot.send_photo(
-                            chat_id=CHANNEL_ID,
-                            photo=image_url,
-                            caption=msg,
-                            parse_mode="HTML"
-                        )
-                    else:
-                        # Fallback: Send standard text message if no image exists
-                        await bot.send_message(
-                            chat_id=CHANNEL_ID,
-                            text=msg,
-                            parse_mode="HTML",
-                            disable_web_page_preview=False
-                        )
-                        
-                    print(f"✅ Posted actual product successfully!")
-                    save_posted_deal(deal_id)
-                    new_finds += 1
-                    await asyncio.sleep(4) 
-                except Exception as e:
-                    print(f"❌ Telegram Error: {e}")
-                    save_posted_deal(deal_id)
-            else:
-                # Mark as scanned if it was a generic sale page or not Amazon
-                save_posted_deal(deal_id)
-
-    if new_finds > 0:
-        print(f"📊 Scan Complete | New Deals Posted: {new_finds}")
 
 # -----------------------------
 # MAIN LOOP
 # -----------------------------
 async def run_bot():
-    while True:
-        print(f"\n⚡ [{datetime.now().strftime('%H:%M:%S')}] Scanning feeds for Pure Amazon Deals...")
-        await hunt_and_post()
-        print("⏳ Waiting 60 seconds...\n")
-        await asyncio.sleep(60) 
+    categories = [
 
+    # 🔥 Electronics (High Earnings)
+    "smartphones under 20000", "smartphones under 15000",
+    "gaming laptops under 60000", "laptop under 50000",
+    "wireless earbuds anc", "bluetooth earphones under 1000",
+    "smartwatch under 2000", "smartwatch under 3000",
+    "gaming mouse rgb", "mechanical keyboard wireless",
+    "monitor 24 inch ips", "tablet under 20000",
+    "power bank 10000mah fast charging", "power bank 20000mah",
+    "usb c hub multiport adapter", "wifi router dual band",
+    "bluetooth speaker under 1000", "trimmer for men",
+
+    # 🏠 Home & Kitchen (Very High Conversion)
+    "mixer grinder 750w", "pressure cooker 5 litre",
+    "induction cooktop 2000w", "electric kettle 1.5 litre",
+    "air fryer under 5000", "gas stove 2 burner",
+    "water purifier ro uv", "chimney kitchen auto clean",
+    "non stick cookware set", "dinner set 24 pieces",
+    "water bottle steel 1 litre", "tiffin box for office",
+    "vegetable chopper manual", "storage containers kitchen",
+
+    # 👕 Fashion (Fast Sales)
+    "tshirt men pack of 3", "shirts for men cotton",
+    "jeans for men slim fit", "kurti for women cotton",
+    "saree under 1000", "leggings combo pack",
+    "shoes for men running", "slippers for women",
+    "socks pack of 5", "wallet for men leather",
+    "backpack for college", "travel bag duffle",
+
+    # 💄 Beauty & Personal Care
+    "face wash men", "face wash women",
+    "shampoo 650ml", "hair oil 200ml",
+    "body lotion 500ml", "trimmer women",
+    "perfume for men", "deodorant combo",
+    "face serum vitamin c", "sunscreen spf 50",
+
+    # 🛒 Grocery (REPEAT BUY = 💰 GOLD)
+    "atta 5kg", "rice 5kg", "basmati rice 5kg",
+    "cooking oil 1 litre", "sunflower oil 5 litre",
+    "detergent powder 4kg", "toothpaste combo pack",
+    "biscuits combo pack", "tea powder 1kg",
+    "coffee powder 500g", "dry fruits combo",
+    "honey 1kg", "ghee 1 litre",
+
+    # 👶 Baby & Health
+    "diapers large pack", "baby wipes",
+    "protein powder 1kg", "multivitamin tablets",
+    "digital thermometer", "bp monitor machine",
+    "weighing machine digital", "massager for pain relief",
+
+    # 💼 Office & Study
+    "office chair ergonomic", "study table folding",
+    "laptop stand adjustable", "keyboard mouse combo",
+    "desk organizer", "whiteboard for home",
+    "notebooks pack", "gel pens pack",
+
+    # 🏋️ Fitness & Sports
+    "yoga mat 8mm", "dumbbells set 10kg",
+    "resistance bands heavy", "skipping rope",
+    "protein powder whey", "gym gloves",
+    "cycling helmet", "badminton racket",
+
+    # 🔌 Daily Utility (Hidden Gems 💰)
+    "extension board", "led bulb 9w pack",
+    "emergency light rechargeable", "torch led",
+    "wall clock modern", "bedsheet double",
+    "blanket winter", "curtains for home",
+    "umbrella folding", "door mat",
+
+    # 🔥 TRENDING / IMPULSE BUYS (VERY IMPORTANT)
+    "mini cooler portable", "handheld vacuum cleaner",
+    "portable juicer blender", "car phone holder",
+    "mobile stand adjustable", "ring light for mobile",
+    "tripod stand for phone", "selfie stick bluetooth",
+    "gaming headset under 2000", "led strip lights"
+    ]
+
+    while True:
+        print(f"\n🚀 {datetime.now().strftime('%H:%M')}")
+
+        selected = random.sample(categories, 6)
+
+        for query in selected:
+            print(f"🔍 {query}")
+
+            deals = get_amazon_deals(query)
+            if deals:
+                await send_deals(deals)
+
+        print("😴 Sleeping 5 minutes...\n")
+        await asyncio.sleep(300)
+
+
+# -----------------------------
+# START
+# -----------------------------
 if __name__ == "__main__":
-    print("🚀 Amazon-Exclusive Auto-Deal Bot Started!")
+    print("🚀 Deals Bot Started")
     asyncio.run(run_bot())
