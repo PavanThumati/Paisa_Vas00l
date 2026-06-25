@@ -77,9 +77,14 @@ class BitbucketClient:
                 timeout=60
             )
 
-            if response.status_code == 401:
+            if response.status_code != 200:
                 raise Exception(
-                    "Authentication failed. Check username/password."
+                    f"""
+            HTTP Status : {response.status_code}
+            
+            Response:
+            {response.text}
+            """
                 )
 
             if response.status_code == 404:
