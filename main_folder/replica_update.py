@@ -63,7 +63,28 @@ class ReplicaUpdater:
 
         try:
 
-            repositories = self.bitbucket.get_repositories()
+            repositories = []
+
+            with open(self.config.repository_list) as f:
+            
+                for line in f:
+            
+                    repo = line.strip()
+            
+                    if not repo:
+                        continue
+            
+                    repositories.append(
+                        {
+                            "name": repo,
+                            "slug": repo,
+                            "clone_url":
+                                f"{self.config.bitbucket_url}"
+                                f"/scm/"
+                                f"{self.config.project_key.lower()}"
+                                f"/{repo}.git"
+                        }
+                    )
 
             self.total_repositories = len(repositories)
 
