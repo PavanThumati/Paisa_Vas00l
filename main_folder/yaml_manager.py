@@ -2,9 +2,14 @@
 YAML Manager
 
 Responsible for:
-- Finding all *-app.yaml files
-- Updating every replicas value to 0
-- Preserving YAML formatting using ruamel.yaml
+
+1. Find all *-app.yaml files
+2. Update replicas -> 0
+
+3. Find all *-horizontalpodautoscaler.yml files
+4. Update minReplicas -> 0
+
+Uses ruamel.yaml so formatting/comments are preserved.
 """
 
 from pathlib import Path
@@ -27,28 +32,28 @@ class YAMLManager:
     # ------------------------------------------------------------------
 
     def process_repository(self, repository_path: Path):
-        """
-        Process all *-app.yaml files in a repository.
-
-        Returns
-        -------
-        tuple
-            (
-                files_found,
-                files_updated,
-                replica_updates
-            )
-        """
 
         files_found = 0
         files_updated = 0
-        replica_updates = 0
+        values_updated = 0
 
-        yaml_files = sorted(
+        #
+        # Process *-app.yaml
+        #
+        app_yaml_files = sorted(
             repository_path.rglob("*-app.yaml")
         )
 
-        for yaml_file in yaml_files:
+        #
+        # Process *-horizontalpodautoscaler.yml
+        #
+        hpa_yaml_files = sorted(
+            repository_path.rglob("*-horizontalpodautoscaler.yml")
+        )
+
+        all_yaml_files = app_yaml_files + hpa_yaml_files
+
+        for yaml_file in all_yaml_files:
 
             files_found += 1
 
@@ -58,29 +63,17 @@ class YAMLManager:
 
             if updated:
                 files_updated += 1
-                replica_updates += count
+                values_updated += count
 
         return (
             files_found,
             files_updated,
-            replica_updates
+            values_updated
         )
 
     # ------------------------------------------------------------------
 
     def process_yaml_file(self, yaml_file: Path):
-        """
-        Process a single YAML file.
-
-        Returns
-        -------
-        tuple
-
-        (
-            updated,
-            replica_count
-        )
-        """
 
         self.logger.info(
             f"Scanning {yaml_file}"
@@ -98,22 +91,30 @@ class YAMLManager:
                     self.yaml.load_all(file)
                 )
 
-            replica_updates = 0
+            updates = 0
+
+            #
+            # Determine which key to update
+            #
+            if yaml_file.name.endswith("-app.yaml"):
+
+                target_key = "replicas"
+
+            else:
+
+                target_key = "minReplicas"
 
             for document in documents:
 
                 if document is None:
                     continue
 
-                replica_updates += self.update_replicas(
-                    document
+                updates += self.update_key(
+                    document,
+                    target_key
                 )
 
-            if replica_updates == 0:
-
-                self.logger.info(
-                    "No replica changes required."
-                )
+            if updates == 0:
 
                 return False, 0
 
@@ -129,57 +130,56 @@ class YAMLManager:
                 )
 
             self.logger.info(
-                f"Updated {replica_updates} replica value(s)"
+                f"Updated {updates} value(s)"
             )
 
-            return True, replica_updates
+            return True, updates
 
         except Exception as ex:
 
             self.logger.error(
-                f"Unable to process '{yaml_file}'. {ex}"
+                f"Unable to process {yaml_file}"
+
             )
+
+            self.logger.error(str(ex))
 
             return False, 0
 
     # ------------------------------------------------------------------
 
-    def update_replicas(self, node):
-        """
-        Recursively traverse YAML nodes and update:
-
-            replicas: <any value>
-
-        to
-
-            replicas: 0
-        """
+    def update_key(self, node, target_key):
 
         updates = 0
 
         if isinstance(node, CommentedMap):
 
-            for key, value in node.items():
+            for key in list(node.keys()):
 
-                if key == "replicas":
+                value = node[key]
+
+                if key == target_key:
 
                     if value != 0:
 
                         node[key] = 0
+
                         updates += 1
 
                 else:
 
-                    updates += self.update_replicas(
-                        value
+                    updates += self.update_key(
+                        value,
+                        target_key
                     )
 
         elif isinstance(node, CommentedSeq):
 
             for item in node:
 
-                updates += self.update_replicas(
-                    item
+                updates += self.update_key(
+                    item,
+                    target_key
                 )
 
         return updates
