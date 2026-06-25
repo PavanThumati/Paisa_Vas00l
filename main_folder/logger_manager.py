@@ -25,7 +25,6 @@ class LoggerManager:
         self.logger = logging.getLogger("ReplicaUpdater")
         self.logger.setLevel(logging.INFO)
 
-        # Prevent duplicate handlers if logger is initialized multiple times
         if self.logger.hasHandlers():
             self.logger.handlers.clear()
 
@@ -39,6 +38,7 @@ class LoggerManager:
             mode="w",
             encoding="utf-8"
         )
+
         file_handler.setFormatter(formatter)
 
         console_handler = logging.StreamHandler()
@@ -47,18 +47,15 @@ class LoggerManager:
         self.logger.addHandler(file_handler)
         self.logger.addHandler(console_handler)
 
-        self._initialize_summary_file()
+        self.initialize_summary()
 
-    # ------------------------------------------------------------------
+    # ---------------------------------------------------------
 
-    def _initialize_summary_file(self):
-        """
-        Creates summary.csv with header.
-        """
+    def initialize_summary(self):
 
         with open(
             self.summary_file,
-            mode="w",
+            "w",
             newline="",
             encoding="utf-8"
         ) as csv_file:
@@ -70,12 +67,13 @@ class LoggerManager:
                 "Status",
                 "Files Found",
                 "Files Updated",
-                "Replica Values Updated",
+                "Values Updated",
                 "Commit Created",
+                "Branch Pushed",
                 "Remarks"
             ])
 
-    # ------------------------------------------------------------------
+    # ---------------------------------------------------------
 
     def write_summary(
         self,
@@ -83,17 +81,15 @@ class LoggerManager:
         status,
         files_found,
         files_updated,
-        replica_updates,
+        values_updated,
         commit_created,
+        branch_pushed,
         remarks
     ):
-        """
-        Appends one repository result to summary.csv.
-        """
 
         with open(
             self.summary_file,
-            mode="a",
+            "a",
             newline="",
             encoding="utf-8"
         ) as csv_file:
@@ -105,22 +101,23 @@ class LoggerManager:
                 status,
                 files_found,
                 files_updated,
-                replica_updates,
+                values_updated,
                 commit_created,
+                branch_pushed,
                 remarks
             ])
 
-    # ------------------------------------------------------------------
+    # ---------------------------------------------------------
 
     def info(self, message):
         self.logger.info(message)
 
-    # ------------------------------------------------------------------
+    # ---------------------------------------------------------
 
     def warning(self, message):
         self.logger.warning(message)
 
-    # ------------------------------------------------------------------
+    # ---------------------------------------------------------
 
     def error(self, message):
         self.logger.error(message)
