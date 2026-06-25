@@ -3,23 +3,20 @@ Main Application
 
 Workflow
 
-1. Load configuration
-2. Initialize logger
-3. Connect to Bitbucket
-4. Fetch repositories
-5. Clone repository
-6. Checkout master
-7. Create feature branch
-8. Update replicas to 0
-9. Commit changes
-10. Write summary
+1. Read repositories from repos.txt
+2. Clone repository
+3. Checkout master
+4. Create feature branch
+5. Update YAML files
+6. Commit changes
+7. Push feature branch
+8. Write summary
 """
 
 import traceback
 
 from config import Config
 from logger_manager import LoggerManager
-from bitbucket_client import BitbucketClient
 from git_manager import GitManager
 from yaml_manager import YAMLManager
 
@@ -32,11 +29,6 @@ class ReplicaUpdater:
 
         self.logger = LoggerManager(
             self.config.log_directory
-        )
-
-        self.bitbucket = BitbucketClient(
-            self.config,
-            self.logger
         )
 
         self.git = GitManager(
@@ -55,6 +47,38 @@ class ReplicaUpdater:
 
     # ------------------------------------------------------------
 
+    def read_repositories(self):
+
+        repositories = []
+
+        with open(
+            self.config.repository_list,
+            "r",
+            encoding="utf-8"
+        ) as file:
+
+            for line in file:
+
+                repo = line.strip()
+
+                if not repo:
+                    continue
+
+                repositories.append({
+                    "name": repo,
+                    "slug": repo,
+                    "clone_url": (
+                        f"{self.config.bitbucket_url}"
+                        f"/scm/"
+                        f"{self.config.project_key.lower()}"
+                        f"/{repo}.git"
+                    )
+                })
+
+        return repositories
+
+    # ------------------------------------------------------------
+
     def run(self):
 
         self.logger.info("=" * 80)
@@ -63,43 +87,29 @@ class ReplicaUpdater:
 
         try:
 
-            repositories = []
+            repositories = self.read_repositories()
 
-            with open(self.config.repository_list) as f:
-            
-                for line in f:
-            
-                    repo = line.strip()
-            
-                    if not repo:
-                        continue
-            
-                    repositories.append(
-                        {
-                            "name": repo,
-                            "slug": repo,
-                            "clone_url":
-                                f"{self.config.bitbucket_url}"
-                                f"/scm/"
-                                f"{self.config.project_key.lower()}"
-                                f"/{repo}.git"
-                        }
-                    )
-
-            self.total_repositories = len(repositories)
+            self.total_repositories = len(
+                repositories
+            )
 
             self.logger.info(
-                f"Repositories discovered : {self.total_repositories}"
+                f"Repositories Found : {self.total_repositories}"
             )
 
             for repository in repositories:
 
-                self.process_repository(repository)
+                self.process_repository(
+                    repository
+                )
 
         except Exception as ex:
 
             self.logger.error(str(ex))
-            self.logger.error(traceback.format_exc())
+
+            self.logger.error(
+                traceback.format_exc()
+            )
 
         self.print_summary()
 
@@ -118,52 +128,37 @@ class ReplicaUpdater:
 
         try:
 
-            #
-            # Clone Repository
-            #
             repo = self.git.clone_repository(
                 repository
             )
 
-            #
-            # Checkout master
-            #
             self.git.checkout_master(
                 repo
             )
 
-            #
-            # Create Feature Branch
-            #
             self.git.create_feature_branch(
                 repo
             )
 
-            #
-            # Repository Path
-            #
             repo_path = self.git.repository_path(
                 repository
             )
 
-            #
-            # Update YAML Files
-            #
             (
                 files_found,
                 files_updated,
-                replica_updates
+                values_updated
             ) = self.yaml.process_repository(
                 repo_path
             )
 
             #
-            # No YAML Files
+            # No matching YAML files
             #
             if files_found == 0:
 
                 self.logger.info(
-                    "No *-app.yaml files found."
+                    "No matching YAML files found."
                 )
 
                 self.logger.write_summary(
@@ -171,9 +166,10 @@ class ReplicaUpdater:
                     status="SKIPPED",
                     files_found=0,
                     files_updated=0,
-                    replica_updates=0,
+                    values_updated=0,
                     commit_created="No",
-                    remarks="No *-app.yaml files found"
+                    branch_pushed="No",
+                    remarks="No matching YAML files found"
                 )
 
                 self.skipped += 1
@@ -181,17 +177,25 @@ class ReplicaUpdater:
                 return
 
             #
-            # Commit Changes
+            # Commit
             #
             commit_created = self.git.commit_changes(
                 repo
             )
 
+            branch_pushed = False
+
             if commit_created:
+
+                branch_pushed = self.git.push_branch(
+                    repo
+                )
 
                 status = "SUCCESS"
 
-                remarks = "Commit created"
+                remarks = (
+                    "Commit created and branch pushed"
+                )
 
                 self.successful += 1
 
@@ -203,18 +207,20 @@ class ReplicaUpdater:
 
                 self.skipped += 1
 
-            #
-            # CSV Summary
-            #
             self.logger.write_summary(
                 repository=repo_name,
                 status=status,
                 files_found=files_found,
                 files_updated=files_updated,
-                replica_updates=replica_updates,
+                values_updated=values_updated,
                 commit_created=(
                     "Yes"
                     if commit_created
+                    else "No"
+                ),
+                branch_pushed=(
+                    "Yes"
+                    if branch_pushed
                     else "No"
                 ),
                 remarks=remarks
@@ -241,8 +247,9 @@ class ReplicaUpdater:
                 status="FAILED",
                 files_found=0,
                 files_updated=0,
-                replica_updates=0,
+                values_updated=0,
                 commit_created="No",
+                branch_pushed="No",
                 remarks=str(ex)
             )
                 # ------------------------------------------------------------
@@ -271,9 +278,7 @@ class ReplicaUpdater:
         )
 
         self.logger.info("")
-        self.logger.info(
-            "Execution completed."
-        )
+        self.logger.info("Execution completed.")
 
         self.logger.info(
             f"Execution Log : {self.config.log_directory / 'execution.log'}"
