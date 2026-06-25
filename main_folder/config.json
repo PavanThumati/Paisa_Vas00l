@@ -1,0 +1,17 @@
+{
+    "bitbucket": {
+        "url": "https://bitbucket.company.com",
+        "project_key": "ABCD",
+        "username": "your_username",
+        "password": "your_password"
+    },
+    "git": {
+        "base_branch": "master",
+        "feature_branch": "feature/update-replicas-zero",
+        "commit_message": "Update replicas to 0 in *-app.yaml files"
+    },
+    "directories": {
+        "clone_directory": "repos",
+        "log_directory": "logs"
+    }
+}
