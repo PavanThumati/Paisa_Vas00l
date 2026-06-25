@@ -58,3 +58,7 @@ class Config:
     @property
     def log_directory(self):
         return Path(self.config["directories"]["log_directory"])
+
+    @property
+    def repository_list(self):
+        return self.config["repository_list"]
