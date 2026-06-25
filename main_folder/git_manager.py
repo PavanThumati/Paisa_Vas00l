@@ -171,3 +171,27 @@ class GitManager:
             self.clone_directory /
             repository["slug"]
         )
+        # ------------------------------------------------------------------
+
+    def push_branch(self, repo):
+        """
+        Push feature branch to remote.
+        """
+
+        feature_branch = self.config.feature_branch
+
+        self.logger.info(
+            f"Pushing branch '{feature_branch}'"
+        )
+
+        origin = repo.remotes.origin
+
+        origin.push(
+            refspec=f"{feature_branch}:{feature_branch}"
+        )
+
+        self.logger.info(
+            "Branch pushed successfully."
+        )
+
+        return True
